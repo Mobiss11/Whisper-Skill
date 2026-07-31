@@ -545,3 +545,8 @@ VAD-фильтр (`vad_filter=True` в faster-whisper). См. [docs/known-issues
 - ⭐ Поставь star если зашло
 - 🐛 Issues / pull requests welcome
 - 💬 Любые предложения / new features → issues
+
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE). Используй свободно, в том числе
+коммерчески; при копировании сохраняй указание авторства.
