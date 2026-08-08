@@ -16,6 +16,7 @@ Voice Dictation — Push-to-Talk диктовка вместо клавиату�
 
 Зависимости (поставит wizard, или вручную):
     pip install sounddevice soundfile pynput pyperclip pystray Pillow numpy
+    Windows: pip install pycaw  # управление громкостью приложений
 
 Пермишены:
     macOS — нужно дать разрешение на Accessibility и Microphone:
@@ -59,6 +60,10 @@ DEFAULT_CONFIG = {
     "show_tray": True,                   # значок в трее (если установлен pystray)
     "show_cursor_indicator": True,       # мигающая красная точка у курсора во время записи
     "cursor_indicator_color": "#ef4444", # цвет точки (CSS hex)
+    "audio_ducking_enabled": True,       # Windows: приглушать остальные приложения при записи
+    "audio_ducking_reduction_percent": 70,  # на сколько процентов (0..90)
+    "show_input_device_overlay": True,   # коротко показать активный микрофон по центру
+    "input_device_overlay_duration_ms": 650,
     "log_file": None,                    # путь к файлу лога или null = stdout
     "trim_silence_ms": 200,              # обрезать тишину в начале/конце записи
     "min_duration_ms": 300,              # игнорировать слишком короткие записи (промахи кнопкой)
@@ -724,7 +729,9 @@ class TrayIcon:
 
     def start(self, current_model: Optional[str] = None,
               available_models: Optional[list] = None,
-              on_select_model=None):
+              on_select_model=None,
+              get_audio_ducking_enabled=None,
+              on_open_audio_settings=None):
         """current_model / available_models / on_select_model — для подменю
         "Модель". on_select_model(name) вызывается при клике; обычно делает
         write_config + restart_self()."""
@@ -751,6 +758,20 @@ class TrayIcon:
                 ]
                 menu_entries.append(
                     pystray.MenuItem("Model", pystray.Menu(*model_items))
+                )
+
+            if platform.system() == "Windows":
+                menu_entries.append(pystray.Menu.SEPARATOR)
+                menu_entries.append(
+                    pystray.MenuItem(
+                        "Приглушение звука…",
+                        lambda icon, item: on_open_audio_settings
+                        and on_open_audio_settings(),
+                        checked=lambda item: bool(
+                            get_audio_ducking_enabled
+                            and get_audio_ducking_enabled()
+                        ),
+                    )
                 )
 
             menu_entries.append(pystray.MenuItem("Quit", lambda: self.icon.stop()))
@@ -804,6 +825,14 @@ class TrayIcon:
         img = self._images.get(state)
         if img:
             self.icon.icon = img
+
+    def refresh_menu(self) -> None:
+        if not self._ready or not self.icon:
+            return
+        try:
+            self.icon.update_menu()
+        except Exception as exc:
+            logging.debug(f"tray menu refresh failed: {exc}")
 
 
 # ─── Hotkey-driven main loop ────────────────────────────────────────────────
@@ -866,6 +895,13 @@ def main_loop(cfg: dict, cfg_path: Path):
     state_lock = threading.Lock()
     recorder = AudioRecorder(cfg["sample_rate"], cfg["channels"])
 
+    from scripts.audio_ducking import WindowsAudioDucker, clamp_reduction_percent
+
+    audio_ducker = WindowsAudioDucker(
+        enabled=cfg.get("audio_ducking_enabled", True),
+        reduction_percent=cfg.get("audio_ducking_reduction_percent", 70),
+    )
+
     # macOS low-CPU mode: pystray в фоне и Tk у нас вызывают серьёзный
     # idle-CPU на маке (наблюдалось ~90% на M-чипе). Дефолтно отключаем оба
     # GUI-feedback'а на Mac. Юзер видит CLI-stdout (Recording/Transcribing/✓).
@@ -879,6 +915,29 @@ def main_loop(cfg: dict, cfg_path: Path):
                 "macOS: tray и cursor_indicator отключены ради экономии CPU. "
                 "Чтобы включить — поставь mac_low_cpu_mode: false в конфиге."
             )
+
+    desktop_ui = None
+    get_active_input_device_name = None
+    needs_desktop_ui = (
+        cfg.get("show_input_device_overlay", True)
+        or (platform.system() == "Windows" and cfg.get("show_tray", True))
+    )
+    if needs_desktop_ui and not is_mac_low_cpu:
+        try:
+            from scripts.dictation_desktop_ui import (
+                DictationDesktopUi,
+                active_input_device_name,
+            )
+
+            desktop_ui = DictationDesktopUi()
+            desktop_ui.start()
+            if not desktop_ui.available:
+                desktop_ui = None
+            else:
+                get_active_input_device_name = active_input_device_name
+        except Exception as e:
+            logging.error(f"desktop UI init failed: {e}")
+            desktop_ui = None
 
     def _on_select_model(new_model: str):
         if new_model == cfg.get("model"):
@@ -895,12 +954,43 @@ def main_loop(cfg: dict, cfg_path: Path):
         # Новая копия дождётся освобождения mutex (retry в acquire_single_instance_lock).
         restart_self()
 
+    def _save_audio_settings(enabled: bool, reduction_percent: int):
+        percent = clamp_reduction_percent(reduction_percent)
+        try:
+            cur = load_config(cfg_path)
+            cur["audio_ducking_enabled"] = bool(enabled)
+            cur["audio_ducking_reduction_percent"] = percent
+            write_config(cfg_path, cur)
+        except Exception as e:
+            logging.error(f"failed to write audio ducking settings: {e}")
+            return
+        cfg["audio_ducking_enabled"] = bool(enabled)
+        cfg["audio_ducking_reduction_percent"] = percent
+        audio_ducker.configure(enabled, percent)
+        tray.refresh_menu()
+        state_text = "включено" if enabled else "выключено"
+        print(f"🔉 Приглушение {state_text}; уровень: {percent}%")
+
+    def _open_audio_settings():
+        if desktop_ui is None:
+            logging.warning("audio settings window unavailable: tkinter not initialized")
+            return
+        desktop_ui.open_audio_settings(
+            cfg.get("audio_ducking_enabled", True),
+            cfg.get("audio_ducking_reduction_percent", 70),
+            _save_audio_settings,
+        )
+
     tray = TrayIcon()
     if cfg.get("show_tray") and not is_mac_low_cpu:
         tray.start(
             current_model=cfg.get("model"),
             available_models=list_available_ov_models(),
             on_select_model=_on_select_model,
+            get_audio_ducking_enabled=lambda: cfg.get(
+                "audio_ducking_enabled", True
+            ),
+            on_open_audio_settings=_open_audio_settings,
         )
 
     # Прогрев модели в фоне: первый hotkey-press не должен ждать
@@ -954,6 +1044,16 @@ def main_loop(cfg: dict, cfg_path: Path):
             threading.Thread(target=play_start_beep, daemon=True).start()
         try:
             recorder.start()
+            audio_ducker.duck()
+            if (
+                desktop_ui
+                and get_active_input_device_name
+                and cfg.get("show_input_device_overlay", True)
+            ):
+                desktop_ui.show_microphone(
+                    get_active_input_device_name(),
+                    cfg.get("input_device_overlay_duration_ms", 650),
+                )
             print("🎙  Recording... (release hotkey to transcribe)")
         except Exception as e:
             print(f"❌ Recording failed: {e}")
@@ -977,7 +1077,16 @@ def main_loop(cfg: dict, cfg_path: Path):
         # Сначала закрываем микрофон, потом играем бип. Параллельный запуск
         # winsound во время stream.close() PortAudio даёт повторное звучание
         # (наблюдалось 2026-05-01: один вызов PlaySound → два слышимых тона).
-        wav_path = recorder.stop()
+        try:
+            wav_path = recorder.stop()
+        except Exception as e:
+            print(f"❌ Recording stop failed: {e}")
+            tray.set_state("idle")
+            if cursor_ind:
+                cursor_ind.hide()
+            return
+        finally:
+            audio_ducker.restore()
         if cfg.get("play_sound"):
             threading.Thread(target=play_stop_beep, daemon=True).start()
         if not wav_path:
@@ -1095,6 +1204,11 @@ def main_loop(cfg: dict, cfg_path: Path):
             except KeyboardInterrupt:
                 pass
 
+    audio_ducker.restore()
+    if cursor_ind:
+        cursor_ind.stop()
+    if desktop_ui:
+        desktop_ui.stop()
     print("\n👋 Bye")
     return 0
 
@@ -1214,8 +1328,18 @@ def main():
             __import__(mod)
         except ImportError:
             missing.append(mod)
-    # tkinter нужен только если включён cursor_indicator на не-Mac
-    if cfg.get("show_cursor_indicator", True) and platform.system() != "Darwin":
+    if platform.system() == "Windows" and cfg.get("audio_ducking_enabled", True):
+        try:
+            __import__("pycaw")
+        except ImportError:
+            missing.append("pycaw")
+    # tkinter нужен для cursor indicator, микрофонного HUD и окна настроек.
+    needs_tk = (
+        cfg.get("show_cursor_indicator", True)
+        or cfg.get("show_input_device_overlay", True)
+        or (platform.system() == "Windows" and cfg.get("show_tray", True))
+    )
+    if needs_tk and platform.system() != "Darwin":
         try:
             __import__("tkinter")
         except ImportError:

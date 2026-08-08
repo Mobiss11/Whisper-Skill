@@ -9,6 +9,9 @@ Push-to-talk голосовой ввод во **любое** активное п
 ```bash
 # В venv где уже стоит твой Whisper-бэкенд (mlx / faster / whisperx):
 pip install sounddevice soundfile pynput pyperclip pystray Pillow numpy
+
+# Дополнительно на Windows — приглушение музыки и звонков во время записи:
+pip install pycaw
 ```
 
 ## Как работает
@@ -49,6 +52,10 @@ python -m examples.voice_dictation
   "auto_paste": true,
   "play_sound": true,
   "show_tray": true,
+  "audio_ducking_enabled": true,
+  "audio_ducking_reduction_percent": 70,
+  "show_input_device_overlay": true,
+  "input_device_overlay_duration_ms": 650,
   "trim_silence_ms": 200,
   "min_duration_ms": 300
 }
@@ -65,6 +72,10 @@ python -m examples.voice_dictation
 | `auto_paste` | bool | После транскрибации эмулировать Cmd+V/Ctrl+V. Если `false` — только в clipboard |
 | `play_sound` | bool | Тихие бипы на старт/стоп для обратной связи |
 | `show_tray` | bool | Иконка в трее (меняет цвет: серый/красный/оранжевый) |
+| `audio_ducking_enabled` | bool | Windows: приглушать звук остальных приложений на время записи. Быстро включается и выключается из трея |
+| `audio_ducking_reduction_percent` | 0–90 | Насколько приглушать музыку, браузер, Zoom и другие звонки. Удобный бегунок открывается из трея |
+| `show_input_device_overlay` | bool | На старте записи коротко показать по центру активный микрофон |
+| `input_device_overlay_duration_ms` | int | Сколько миллисекунд показывать карточку микрофона |
 | `min_duration_ms` | int | Игнорировать короткие записи (промахи кнопкой) |
 
 ### Популярные пресеты хоткеев

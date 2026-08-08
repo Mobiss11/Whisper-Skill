@@ -271,7 +271,7 @@ python -m examples.voice_dictation
 python -m examples.voice_dictation --config my_dictation.json
 ```
 
-Кастомизация через JSON — хоткей (любая комбинация `pynput`-формата), модель, режим `ptt` / `toggle`, auto-paste, бипы для feedback'а. Полные опции: [docs/voice-dictation.md](docs/voice-dictation.md).
+Кастомизация через JSON — хоткей, модель, режим `ptt` / `toggle`, auto-paste и бипы. На Windows из трея также настраивается приглушение музыки/звонков во время записи; на старте коротко показывается активный микрофон. Полные опции: [docs/voice-dictation.md](docs/voice-dictation.md).
 
 #### Установка как Windows-приложение (autostart, иконка, ярлык)
 
