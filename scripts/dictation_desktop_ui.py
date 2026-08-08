@@ -304,7 +304,7 @@ class DictationDesktopUi:
         window.configure(bg=PANEL_BORDER)
         window.resizable(False, False)
         window.attributes("-topmost", True)
-        width, height = 392, 180
+        width, height = 392, 146
         x, y = self._flyout_position(width, height)
         window.geometry(f"{width}x{height}+{x}+{y}")
         panel = tk.Frame(window, bg=PANEL_BG)
@@ -373,15 +373,6 @@ class DictationDesktopUi:
             takefocus=True,
         )
         slider.place(x=18, y=101)
-        description = tk.Label(
-            panel,
-            bg=PANEL_BG,
-            fg=MUTED_TEXT,
-            font=("Segoe UI", 8),
-            anchor="w",
-        )
-        description.place(x=18, y=140, width=354)
-
         save_job = None
         last_saved = (bool(enabled), int(round(percent_var.get())))
         closing = False
@@ -481,12 +472,6 @@ class DictationDesktopUi:
             level_fg = TEXT if is_enabled else "#697384"
             level_label.configure(fg=level_fg)
             value_label.configure(fg=ACCENT if is_enabled else "#697384")
-            if is_enabled:
-                description.configure(
-                    text=f"Остальные приложения останутся на {100 - percent}% громкости."
-                )
-            else:
-                description.configure(text="Остальные приложения не приглушаются.")
             redraw_toggle()
             redraw_slider()
 
