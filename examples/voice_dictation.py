@@ -59,6 +59,16 @@ DEFAULT_CONFIG = {
     "show_tray": True,                   # значок в трее (если установлен pystray)
     "show_cursor_indicator": True,       # мигающая красная точка у курсора во время записи
     "cursor_indicator_color": "#ef4444", # цвет точки (CSS hex)
+    # Затравка (initial_prompt) задаёт модели язык, алфавит и стиль. На тихих
+    # и коротких репликах Whisper иногда срывается в чужой язык даже при
+    # принудительном language — затравка это гасит. Язык-зависимая вещь,
+    # поэтому по умолчанию пусто; пример для русского:
+    #   "initial_prompt": "Это диктовка на русском языке, текст кириллицей."
+    "initial_prompt": None,
+    # Для диктовки каждая реплика независима, и перенос контекста между
+    # окнами только провоцирует дрейф. В обычной транскрибации длинного
+    # файла контекст полезен — там значение по умолчанию другое.
+    "condition_on_previous_text": False,
     "log_file": None,                    # путь к файлу лога или null = stdout
     "trim_silence_ms": 200,              # обрезать тишину в начале/конце записи
     "min_duration_ms": 300,              # игнорировать слишком короткие записи (промахи кнопкой)
@@ -1009,6 +1019,7 @@ def main_loop(cfg: dict, cfg_path: Path):
                     wav_path,
                     language=cfg.get("language"),
                     model_name=cfg.get("model"),
+                    backend=cfg.get("backend"),
                     word_timestamps=False,
                     verbose=False,
                 )
@@ -1180,6 +1191,16 @@ def main():
 
     cfg_path = Path(args.config) if args.config else default_config_path()
     cfg = load_config(cfg_path)
+
+    # common.py читает эти параметры из окружения — прокидываем их туда из
+    # конфига. Явно заданная переменная окружения важнее конфига, чтобы
+    # разовый запуск можно было переопределить без правки JSON.
+    if cfg.get("initial_prompt") and not os.environ.get("WHISPER_INITIAL_PROMPT"):
+        os.environ["WHISPER_INITIAL_PROMPT"] = cfg["initial_prompt"]
+    if "WHISPER_CONDITION_ON_PREV" not in os.environ:
+        os.environ["WHISPER_CONDITION_ON_PREV"] = (
+            "1" if cfg.get("condition_on_previous_text") else "0"
+        )
 
     if cfg.get("log_file"):
         _attach_log_file(cfg["log_file"], args.verbose)
