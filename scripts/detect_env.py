@@ -154,12 +154,25 @@ def detect_cpu(env: Env) -> None:
         except Exception:
             env.cpu_brand = platform.processor() or "unknown"
     else:  # Windows
-        env.cpu_brand = platform.processor() or "unknown"
-        env.is_intel_cpu = "Intel" in env.cpu_brand
-        # Через wmic можно получить SecondLevelAddressTranslation, но не AVX2.
-        # Используем эвристику: современные Intel Core i3+ от Haswell (2013+)
-        # поддерживают AVX2. Если в имени есть "Core" и не "Atom" — считаем что есть.
+        # platform.processor() на Windows отдаёт "Intel64 Family 6 Model 186 ...",
+        # без маркетингового имени — эвристика по "Core" на нём не срабатывает.
+        # Настоящее имя процессора лежит в реестре.
+        brand = ""
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+            ) as k:
+                brand = winreg.QueryValueEx(k, "ProcessorNameString")[0].strip()
+        except Exception:
+            pass
+        env.cpu_brand = brand or platform.processor() or "unknown"
+        env.is_intel_cpu = "Intel" in env.cpu_brand or "Intel" in (platform.processor() or "")
+        # Эвристика: Intel Core от Haswell (2013+) и все AMD Ryzen поддерживают AVX2.
         if env.is_intel_cpu and "Core" in env.cpu_brand and "Atom" not in env.cpu_brand:
+            env.cpu_supports_avx2 = True
+        elif "Ryzen" in env.cpu_brand or "EPYC" in env.cpu_brand:
             env.cpu_supports_avx2 = True
 
 
@@ -232,14 +245,27 @@ def detect_ram(env: Env) -> None:
                         env.ram_gb = round(kb / 1024**2, 1)
                         break
         elif env.os_name == "Windows":
-            out = subprocess.check_output(
-                ["wmic", "computersystem", "get", "totalphysicalmemory"], text=True
-            )
-            for line in out.splitlines():
-                line = line.strip()
-                if line.isdigit():
-                    env.ram_gb = round(int(line) / 1024**3, 1)
-                    break
+            # wmic вырезан из Windows 11 24H2+, поэтому идём через ctypes —
+            # GlobalMemoryStatusEx есть в любой версии Windows.
+            import ctypes
+
+            class _MemStatus(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            st = _MemStatus()
+            st.dwLength = ctypes.sizeof(_MemStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                env.ram_gb = round(st.ullTotalPhys / 1024**3, 1)
     except Exception:
         env.ram_gb = 0.0
 
