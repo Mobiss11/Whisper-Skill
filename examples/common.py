@@ -202,6 +202,10 @@ def _transcribe_faster(audio, lang, model_name, word_ts, verbose):
     beam_size = int(os.environ.get("WHISPER_BEAM_SIZE", "5"))
     best_of = int(os.environ.get("WHISPER_BEST_OF", "5"))
     condition_on_prev = os.environ.get("WHISPER_CONDITION_ON_PREV", "1") != "0"
+    # Затравка задаёт модели язык и алфавит. Без неё Whisper на коротких
+    # репликах иногда сваливается в латиницу посреди кириллицы
+    # («Preвет» вместо «Привет») даже при принудительном language.
+    initial_prompt = os.environ.get("WHISPER_INITIAL_PROMPT") or None
     segments_iter, info = model.transcribe(
         audio,
         language=lang,
@@ -211,6 +215,7 @@ def _transcribe_faster(audio, lang, model_name, word_ts, verbose):
         beam_size=beam_size,
         best_of=best_of,
         condition_on_previous_text=condition_on_prev,
+        initial_prompt=initial_prompt,
     )
     segs: list[Segment] = []
     text_parts: list[str] = []
@@ -222,13 +227,39 @@ def _transcribe_faster(audio, lang, model_name, word_ts, verbose):
         segs.append(seg)
         text_parts.append(s.text)
 
+    text = "".join(text_parts).strip()
+
+    # На неразборчивом звуке Whisper иногда возвращает саму затравку как
+    # результат. Для диктовки это означает мусорную вставку в документ,
+    # поэтому эхо глушим — пустой результат честнее выдуманного.
+    if initial_prompt and text and _is_prompt_echo(text, initial_prompt):
+        text, segs = "", []
+
     return Result(
-        text="".join(text_parts).strip(),
+        text=text,
         language=info.language,
         segments=segs,
         backend="faster",
         model=model_name,
     )
+
+
+def _normalize_for_echo(s: str) -> str:
+    return "".join(c.lower() for c in s if c.isalnum() or c.isspace()).split()
+
+
+def _is_prompt_echo(text: str, prompt: str) -> bool:
+    """Результат целиком состоит из слов затравки и идёт их подпоследовательностью."""
+    t = _normalize_for_echo(text)
+    p = _normalize_for_echo(prompt)
+    if not t or not p:
+        return False
+    # Одно-два слова глушить нельзя: «диктовка» может быть настоящей репликой.
+    # Эхо затравки всегда длиннее.
+    if len(t) < 3:
+        return False
+    joined_t, joined_p = " ".join(t), " ".join(p)
+    return joined_t in joined_p
 
 
 def _transcribe_whisperx(audio, lang, model_name, word_ts, verbose):
